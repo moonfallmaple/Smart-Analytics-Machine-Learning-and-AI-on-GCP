@@ -1,0 +1,118 @@
+## Task 1
+通过cURL 发起HTTP request 将一段文本发送给 Natural Language API's classifyText method，来识别文本内容类型
+
+```
+gcloud auth list:
+
+gcloud config list project:
+
+使用Cloud API 需要先生成API Key，再将API Key 设置为全局变量
+API Key：
+
+export API_KEY=<YOUR_API_KEY>
+
+create new file "request.json"
+{
+  "document":{
+    "type":"PLAIN_TEXT",
+    "content":"A Smoky Lobster Salad With a Tapa Twist. This spin on the Spanish pulpo a la gallega skips the octopus, but keeps the sea salt, olive oil, pimentón and boiled potatoes."
+  }
+}
+然后通过command Url 将以上json file 发送给 Natural Language API's classifyText method
+curl "https://language.googleapis.com/v1/documents:classifyText?key=AIzaSyDcICKsqR0ktMh-G7tEDXehAg-U_mjMO1Y" \
+  -s -X POST -H "Content-Type: application/json" --data-binary @request.json
+
+通过cat命令查看文本
+gsutil cat gs://cloud-training-demos-text/bbc_dataset/entertainment/001.txt
+
+```
+
+## Task 2
+读取bucket中的文本信息，逐一通过language client 的classifyText method 归类，然后存到bigquery中
+```
+export PROJECT=<your_project_name>
+
+新增service account
+gcloud iam service-accounts create my-account --display-name my-account
+gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:my-account@$PROJECT.iam.gserviceaccount.com --role=roles/bigquery.admin
+gcloud iam service-accounts keys create key.json --iam-account=my-account@$PROJECT.iam.gserviceaccount.com
+export GOOGLE_APPLICATION_CREDENTIALS=key.json
+
+
+新建classify-text.py 
+
+from google.cloud import storage, language_v1, bigquery
+# Set up our GCS, NL, and BigQuery clients
+storage_client = storage.Client()
+nl_client = language_v1.LanguageServiceClient()
+# TODO: replace YOUR_PROJECT with your project id below
+bq_client = bigquery.Client(project='YOUR_PROJECT')
+
+dataset_ref = bq_client.dataset('news_classification_dataset')
+dataset = bigquery.Dataset(dataset_ref)
+table_ref = dataset.table('article_data') # Update this if you used a different table name
+table = bq_client.get_table(table_ref)
+# Send article text to the NL API's classifyText method
+def classify_text(article):
+        response = nl_client.classify_text(
+                document=language_v1.types.Document(
+                        content=article,
+                        type_='PLAIN_TEXT'
+                )
+        )
+        return response
+rows_for_bq = []
+files = storage_client.bucket('cloud-training-demos-text').list_blobs()
+print("Got article files from GCS, sending them to the NL API (this will take ~2 minutes)...")
+# Send files to the NL API and save the result to send to BigQuery
+for file in files:
+        if file.name.endswith('txt'):
+                article_text = file.download_as_bytes()
+                nl_response = classify_text(article_text)
+                if len(nl_response.categories) > 0:
+                        rows_for_bq.append((str(article_text), str(nl_response.categories[0].name), nl_response.categories[0].confidence))
+print("Writing NL API article data to BigQuery...")
+# Write article text + category data to BQ
+errors = bq_client.insert_rows(table, rows_for_bq)
+assert errors == []
+
+python3 classify-text.py
+```
+
+## 补充信息
+## cURL
+是用于构造 HTTP 请求的命令行工具。
+
+ ```
+Get 请求：
+ $ curl https://www.example.com
+-H 命令添加 HTTP 标头Accept-Language: en-US
+ $ curl -H 'Accept-Language: en-US' https://google.com
+
+-X 参数指定 HTTP 请求的方法
+ $ curl -X POST https://www.example.com (对https://www.example.com发出 POST 请求)
+ 
+-d 参数用于发送 POST 请求的数据体
+ 使用-d参数以后，HTTP 请求会自动加上标头Content-Type : application/x-www-form-urlencoded。并且会自动将请求转为 POST 方法，因此可以省略-X POST
+$ curl -d'login=emma＆password=123'-X POST https://google.com/login
+# 或者
+$ curl -d 'login=emma' -d 'password=123' -X POST  https://google.com/login
+# 参数可以读取本地文本文件的数据，向服务器发送。
+$ curl -d '@data.txt' https://google.com/login
+ 
+-s 参数将不输出错误和进度信息
+ $ curl -s https://www.example.com
+ 
+ --data-urlencode
+ 参数等同于-d，发送 POST 请求的数据体，区别在于会自动将发送的数据进行 URL 编码。
+ $ curl --data-urlencode 'comment=hello world' https://google.com/login
+ 上面代码中，发送的数据hello world之间有一个空格，需要进行 URL 编码。
+ 
+ ```
+
+## export命令
+在shell中执行程序时，shell会提供一组环境变量。export可新增，修改或删除环境变量，供后续执行的程序使用。
+export [-fnp][变量名称]=[变量设置值]
+-f 　代表[变量名称]中为函数名称。
+-n 　删除指定的变量。变量实际上并未删除，只是不会输出到后续指令的执行环境中。
+-p 　列出所有的shell赋予程序的环境变量。
